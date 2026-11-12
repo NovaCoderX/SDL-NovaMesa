@@ -97,4 +97,14 @@
 	#define CHECK_LEAKS 1
 #endif
 
+// Not supported
+#define SDL_CDROM_DISABLED 1
+#define SDL_JOYSTICK_DISABLED 1
+
+// Implementations
+#define SDL_VIDEO_DRIVER_AMIGA 1
+#define SDL_AUDIO_DRIVER_AMIGA 1
+#define SDL_THREAD_AMIGA 1
+//#define SDL_VIDEO_OPENGL 1
+
 #endif /* _SDL_config_amigaos_h */
