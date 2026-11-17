@@ -69,7 +69,7 @@ int SDL_RunAudio(void *audiop)
 
     // Audio must be opened from the Audio Thread.
     audio->opened = audio->OpenAudio(&audio->spec);
-	if (!audio->opened ) {
+	if (audio->opened < 0) {
 		SDL_CloseAudio();
 		return(-1);
 	}
