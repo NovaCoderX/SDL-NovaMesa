@@ -402,7 +402,10 @@ extern VideoBootStrap AALIB_bootstrap;
 #if SDL_VIDEO_DRIVER_CACA
 extern VideoBootStrap CACA_bootstrap;
 #endif
-#ifdef SDL_VIDEO_DRIVER_AMIGA
+#ifdef SDL_VIDEO_DRIVER_AMIGA_AGA
+extern VideoBootStrap AGA_bootstrap;
+#endif
+#ifdef SDL_VIDEO_DRIVER_AMIGA_RTG
 extern VideoBootStrap RTG_bootstrap;
 #endif
 #if SDL_VIDEO_DRIVER_DUMMY

@@ -125,7 +125,10 @@ static VideoBootStrap *bootstrap[] = {
 #if SDL_VIDEO_DRIVER_CACA
 	&CACA_bootstrap,
 #endif
-#ifdef SDL_VIDEO_DRIVER_AMIGA
+#ifdef SDL_VIDEO_DRIVER_AMIGA_AGA
+	&AGA_bootstrap,
+#endif
+#ifdef SDL_VIDEO_DRIVER_AMIGA_RTG
 	&RTG_bootstrap,
 #endif
 #if SDL_VIDEO_DRIVER_DUMMY
