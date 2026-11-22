@@ -25,7 +25,7 @@
 #include "SDL_video.h"
 #include "amiga_video_c.h"
 
-#if defined(SDL_VIDEO_OPENGL) && defined(SDL_VIDEO_DRIVER_AMIGA)
+#if defined(SDL_VIDEO_OPENGL) && defined(SDL_VIDEO_DRIVER_AMIGA_RTG)
 
 #include <GL/amiga_mesa.h>
 static AMesaContext *context = NULL;

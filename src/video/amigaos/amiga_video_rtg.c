@@ -22,7 +22,7 @@
 
 #include "SDL.h"
 
-#ifdef SDL_VIDEO_DRIVER_AMIGA
+#ifdef SDL_VIDEO_DRIVER_AMIGA_RTG
 
 #ifdef DEBUG
 #include <assert.h>
@@ -354,12 +354,12 @@ SDL_Rect** RTG_ListModes(SDL_PixelFormat *format, Uint32 flags) {
     			pixelFormat = p96GetModeIDAttr(nextid, P96IDA_RGBFORMAT);
 
 				// We only support 8 and 32-bit modes (from an SDL perspective).
-				if ((format->BitsPerPixel == 8) && (pixelFormat == RGBFB_CLUT)) {
+				if ((format && format->BitsPerPixel == 8) && (pixelFormat == RGBFB_CLUT)) {
 					validMode = SDL_TRUE;
 				}
 
 				// A 32-bit request needs a 32-bit mode
-				if ((format->BitsPerPixel == 32) && (isPixelFormat32(pixelFormat))) {
+				if ((format && format->BitsPerPixel == 32) && (isPixelFormat32(pixelFormat))) {
 					validMode = SDL_TRUE;
 				}
         		
@@ -388,6 +388,7 @@ SDL_Rect** RTG_ListModes(SDL_PixelFormat *format, Uint32 flags) {
     				for (i = 0; i < _numScreenModes; i++) {
     					if (_screenModeList[i]->w == width && _screenModeList[i]->h == height) {
     						found = 1;
+    						break;
     					}
     				}
 
@@ -443,12 +444,12 @@ SDL_Rect** RTG_ListModes(SDL_PixelFormat *format, Uint32 flags) {
   		// We only support 8 and 32-bit modes (from an SDL perspective).
     	// An 8-bit surface is expanded to ARGB by us before it is displayed,
 		// so the screen itself has to be deeper than 8 bits.
-		if ((format->BitsPerPixel == 8) && (screenDepth > 8)) {
+		if ((format && format->BitsPerPixel == 8) && (screenDepth > 8)) {
 			screenValid = SDL_TRUE;
 		}
 
 		// A 32-bit request needs a 32-bit screen.
-		if ((format->BitsPerPixel == 32) && (isPixelFormat32(screenFormat))) {
+		if ((format && format->BitsPerPixel == 32) && (isPixelFormat32(screenFormat))) {
 			screenValid = SDL_TRUE;
 		}
 
@@ -604,12 +605,12 @@ SDL_Rect** RTG_ListModesEx(SDL_PixelFormat *format, Uint32 flags) {
   		// We only support 8 and 32-bit modes (from an SDL perspective).
     	// An 8-bit surface is expanded to ARGB by us before it is displayed,
 		// so the screen itself has to be deeper than 8 bits.
-		if ((format->BitsPerPixel == 8) && (screenDepth > 8)) {
+		if ((format && format->BitsPerPixel == 8) && (screenDepth > 8)) {
 			screenValid = SDL_TRUE;
 		}
 
 		// A 32-bit request needs a 32-bit screen.
-		if ((format->BitsPerPixel == 32) && (isPixelFormat32(screenFormat))) {
+		if ((format && format->BitsPerPixel == 32) && (isPixelFormat32(screenFormat))) {
 			screenValid = SDL_TRUE;
 		}
                
@@ -870,7 +871,7 @@ SDL_Surface* RTG_SetVideoMode(SDL_Surface *currentSurface, int width, int height
 		
         // Need to set the custom screen black because it could be bigger than what was asked for.
         blackPen = ObtainBestPen(_customScreen->ViewPort.ColorMap, 0, 0, 0, TAG_DONE);
-        if (blackPen) {
+        if (blackPen != -1) {
         	SetAPen(AMIGA_WINDOW->RPort, blackPen);
             RectFill(AMIGA_WINDOW->RPort, 0, 0, AMIGA_WINDOW->Width - 1, AMIGA_WINDOW->Height - 1);
             ReleasePen(_customScreen->ViewPort.ColorMap, blackPen);
@@ -945,7 +946,7 @@ SDL_Surface* RTG_SetVideoMode(SDL_Surface *currentSurface, int width, int height
 
         // Set the window to black.
 		blackPen = ObtainBestPen(AMIGA_WINDOW->WScreen->ViewPort.ColorMap, 0, 0, 0, TAG_DONE);
-		if (blackPen) {
+		if (blackPen != -1) {
 			SetAPen(AMIGA_WINDOW->RPort, blackPen);
 
 			// Fill only the inner window area to preserve window borders and gadgets.
@@ -1409,4 +1410,4 @@ static SDL_VideoDevice* RTG_CreateDevice(int devindex) {
 
 VideoBootStrap RTG_bootstrap = { "RTG", "AmigaOS RTG", RTG_Available, RTG_CreateDevice };
 
-#endif  // SDL_VIDEO_DRIVER_AMIGA
+#endif  // SDL_VIDEO_DRIVER_AMIGA_RTG
