@@ -338,7 +338,7 @@ SDL_Rect** RTG_ListModes(SDL_PixelFormat *format, Uint32 flags) {
 	}
 
 	if ((flags & SDL_FULLSCREEN) == SDL_FULLSCREEN) {
-		ULONG width, height, pixelFormat, depth;
+		ULONG width, height, pixelFormat;
 #ifdef DEBUG_VIDEO
 		SDL_LogDebugMsgchar("[RTG_ListModes]: Generating a list of screen modes with a depth of %u bits\n", format->BitsPerPixel);
 #endif
@@ -352,10 +352,9 @@ SDL_Rect** RTG_ListModes(SDL_PixelFormat *format, Uint32 flags) {
 				width = p96GetModeIDAttr(nextid, P96IDA_WIDTH);
     			height = p96GetModeIDAttr(nextid, P96IDA_HEIGHT);
     			pixelFormat = p96GetModeIDAttr(nextid, P96IDA_RGBFORMAT);
-    			depth = p96GetModeIDAttr(nextid, P96IDA_DEPTH);
 
 				// We only support 8 and 32-bit modes (from an SDL perspective).
-    			if ((format && format->BitsPerPixel == 8) && (depth > 8)) {
+    			if ((format && format->BitsPerPixel == 8) && (pixelFormat == RGBFB_CLUT)) {
 					validMode = SDL_TRUE;
 				}
 
