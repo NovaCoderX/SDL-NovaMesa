@@ -62,8 +62,8 @@ struct Library *P96Base = NULL;
 // Custom screen - Only used when running in full screen mode.
 static struct Screen *_customScreen = NULL;
 
-SDL_Rect** _screenModeList = NULL;
-int _numScreenModes = 0;
+static SDL_Rect** _screenModeList = NULL;
+static int _numScreenModes = 0;
 
 static char *_screenTitle = NULL;
 static char *_windowTitle = NULL;
@@ -338,7 +338,7 @@ SDL_Rect** RTG_ListModes(SDL_PixelFormat *format, Uint32 flags) {
 	}
 
 	if ((flags & SDL_FULLSCREEN) == SDL_FULLSCREEN) {
-		ULONG width, height, pixelFormat;
+		ULONG width, height, pixelFormat, depth;
 #ifdef DEBUG_VIDEO
 		SDL_LogDebugMsgchar("[RTG_ListModes]: Generating a list of screen modes with a depth of %u bits\n", format->BitsPerPixel);
 #endif
@@ -352,9 +352,10 @@ SDL_Rect** RTG_ListModes(SDL_PixelFormat *format, Uint32 flags) {
 				width = p96GetModeIDAttr(nextid, P96IDA_WIDTH);
     			height = p96GetModeIDAttr(nextid, P96IDA_HEIGHT);
     			pixelFormat = p96GetModeIDAttr(nextid, P96IDA_RGBFORMAT);
+    			depth = p96GetModeIDAttr(nextid, P96IDA_DEPTH);
 
 				// We only support 8 and 32-bit modes (from an SDL perspective).
-				if ((format && format->BitsPerPixel == 8) && (pixelFormat == RGBFB_CLUT)) {
+    			if ((format && format->BitsPerPixel == 8) && (depth > 8)) {
 					validMode = SDL_TRUE;
 				}
 

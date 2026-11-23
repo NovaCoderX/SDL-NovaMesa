@@ -42,6 +42,8 @@
 #include <proto/exec.h>
 #include <proto/intuition.h>
 #include <proto/graphics.h>
+#include <graphics/videocontrol.h>
+#include <utility/tagitem.h>
 #include "amiga_c2p_aga.h"
 
 
@@ -56,8 +58,19 @@
 // Custom screen - Only used when running in full screen mode.
 static struct Screen *_customScreen = NULL;
 
-SDL_Rect** _screenModeList = NULL;
-int _numScreenModes = 0;
+static SDL_Rect** _screenModeList = NULL;
+static int _numScreenModes = 0;
+
+// Size of the screen actually opened. This is the same as the SDL surface in fullscreen mode
+// but can be bigger in the (virtual) windowed mode, where the surface is centred on the screen.
+static int _screenWidth = 0;
+static int _screenHeight = 0;
+static int _surfaceLeft = 0;
+static int _surfaceTop = 0;
+
+// Only used in the (virtual) windowed mode, a screen sized chunky buffer that the smaller
+// SDL surface is copied into before it is passed to the C2P (which works on whole screens).
+static UBYTE *_chunkyBuffer = NULL;
 
 // Available PAL screen modes.
 #define NUMBER_OF_SCREEN_MODES  6
@@ -68,13 +81,33 @@ static char *_windowTitle = NULL;
 
 // Palette data.
 static SDL_Color _currentPalette[256];
-static int _paletteDirtyStart = 255;
-static int _paletteDirtyEnd = 0;
 
 // C2P
 static void *c2p[2] = {NULL, NULL};
 static struct ScreenBuffer *_hardwareScreenBuffer[2] = {NULL, NULL};
 static BYTE _currentScreenBuffer = 0;
+
+// Finds the smallest of our modes that a (virtual) window of the passed size will fit inside.
+static SDL_bool FindVirtualScreenSize(int width, int height, int *screenWidth, int *screenHeight) {
+	int i;
+	int best = -1;
+
+	for (i = 0; i < NUMBER_OF_SCREEN_MODES; i++) {
+		if ((_screenModes[i].w >= width) && (_screenModes[i].h >= height)) {
+			if ((best < 0) || ((_screenModes[i].w * _screenModes[i].h) < (_screenModes[best].w * _screenModes[best].h))) {
+				best = i;
+			}
+		}
+	}
+
+	if (best < 0) {
+		return SDL_FALSE;
+	}
+
+	*screenWidth = _screenModes[best].w;
+	*screenHeight = _screenModes[best].h;
+	return SDL_TRUE;
+}
 
 static SDL_bool IsValidPALMode(ULONG modeId, int width, int height) {
 	DisplayInfoHandle handle;
@@ -207,6 +240,28 @@ static int AGA_VideoInit(SDL_PixelFormat *vformat) {
 	return 0;
 }
 
+// Loads part of our stored palette into the custom screen.
+static void LoadPalette(int firstcolor, int ncolors) {
+	// Static, 12KB is a lot to put on an Amiga stack.
+	static ULONG palette[256 * 3 + 2];
+	int i;
+
+	if (!_customScreen) {
+		return;
+	}
+
+	for (i = 0; i < ncolors; i++) {
+		// LoadRGB32 wants left justified 32-bit values.
+		palette[i * 3 + 1] = _currentPalette[firstcolor + i].r * 0x01010101UL;
+		palette[i * 3 + 2] = _currentPalette[firstcolor + i].g * 0x01010101UL;
+		palette[i * 3 + 3] = _currentPalette[firstcolor + i].b * 0x01010101UL;
+	}
+
+	palette[0] = ((ULONG)ncolors << 16) + firstcolor;
+	palette[((ncolors * 3) + 1)] = 0x00000000;
+	LoadRGB32(&_customScreen->ViewPort, palette);
+}
+
 static void FreeScreenModeList(void) {
 	int i;
 
@@ -224,7 +279,7 @@ static void FreeScreenModeList(void) {
 	_numScreenModes = 0;
 }
 
-SDL_Rect** AGA_ListModes(SDL_PixelFormat *format, Uint32 flags) {
+static SDL_Rect** AGA_ListModes(SDL_PixelFormat *format, Uint32 flags) {
     int i;
 
 	// Reject any unsupported flags.
@@ -234,21 +289,20 @@ SDL_Rect** AGA_ListModes(SDL_PixelFormat *format, Uint32 flags) {
 		}
 	}
 
-#ifndef SDL_VIDEO_OPENGL
+	// No OpenGL on AGA.
     if ((flags & SDL_OPENGL) == SDL_OPENGL) {
         return NULL;
     }
-#endif
 
 	// Reset.
     FreeScreenModeList();
 
 	//if ((flags & SDL_FULLSCREEN) == SDL_FULLSCREEN) {
 #ifdef DEBUG_VIDEO
-		SDL_LogDebugMsgchar("[AGA_ListModes]: Generating a list of screen modes with a depth of %u bits\n", format->BitsPerPixel);
+		SDL_LogDebugMsgchar("[AGA_ListModes]: Generating a list of screen modes with a depth of %u bits\n", format ? format->BitsPerPixel : 0);
 #endif
 
-		if (format->BitsPerPixel == AGA_DISPLAY_DEPTH) {
+		if (format && format->BitsPerPixel == AGA_DISPLAY_DEPTH) {
 			for (i = 0; i < NUMBER_OF_SCREEN_MODES; i++) {
 				_numScreenModes++;
 				_screenModeList = (SDL_Rect**) SDL_realloc(_screenModeList, (_numScreenModes + 1) * sizeof(SDL_Rect*));
@@ -278,33 +332,12 @@ SDL_Rect** AGA_ListModes(SDL_PixelFormat *format, Uint32 flags) {
 	return _screenModeList;
 }
 
-SDL_Rect** AGA_ListModesEx(SDL_PixelFormat *format, Uint32 flags) {
-	// Reject any unsupported flags.
-	if ((flags & SDL_HWSURFACE) == SDL_HWSURFACE) {
-		if ((flags & SDL_SWSURFACE) != SDL_SWSURFACE) {
-			return NULL;
-		}
-	}
-
-#ifndef SDL_VIDEO_OPENGL
-    if ((flags & SDL_OPENGL) == SDL_OPENGL) {
-        return NULL;
-    }
-#endif
-
-	//if ((flags & SDL_FULLSCREEN) == SDL_FULLSCREEN) {
-		AGA_ListModes(format, flags);
-	//}
-
-	return _screenModeList;
+static SDL_Rect** AGA_ListModesEx(SDL_PixelFormat *format, Uint32 flags) {
+	// Every mode we have is a native one.
+	return AGA_ListModes(format, flags);
 }
 
-void AGA_ShutdownMode(void) {
-#ifdef SDL_VIDEO_OPENGL
-	// Free any existing OpenGL context.
-	NovaMesa_Quit();
-#endif
-
+static void AGA_ShutdownMode(void) {
     if (AMIGA_WINDOW) {
 #ifdef DEBUG_VIDEO
 		SDL_LogDebugMsgchar("[AGA_ShutdownMode]: Closing the window\n");
@@ -346,9 +379,15 @@ void AGA_ShutdownMode(void) {
 		_customScreen = NULL;
 	}
 
+	if (_chunkyBuffer) {
+		SDL_free(_chunkyBuffer);
+		_chunkyBuffer = NULL;
+	}
+
     // Reset.
-    _paletteDirtyStart = 255;
-    _paletteDirtyEnd = 0;
+    _currentScreenBuffer = 0;
+    _screenWidth = _screenHeight = 0;
+    _surfaceLeft = _surfaceTop = 0;
 	AMIGA_WINDOW = NULL;
 }
 
@@ -372,18 +411,37 @@ static struct Screen* createCustomScreen(ULONG modeId, int width, int height, in
 	}
 #endif
 
+	if (screen) {
+		// The hardware fills the border (overscan) with colour 0, so any palette effect that
+		// changes colour 0 (e.g. a damage flash) would also tint the border. Blank it instead.
+		struct TagItem videoTags[] = {
+			{ VTAG_BORDERBLANK_SET, TRUE },
+			{ TAG_DONE, 0 }
+		};
+
+		if (VideoControl(screen->ViewPort.ColorMap, videoTags) == 0) {
+			MakeScreen(screen);
+			RethinkDisplay();
+		}
+#ifdef DEBUG_VIDEO
+		else {
+			SDL_LogDebugMsgchar("VideoControl failed, the border will not be blanked\n");
+		}
+#endif
+	}
+
 	return screen;
 }
 
-static struct Window* createWindow(int width, int height, struct Screen *screen) {
+static struct Window* createWindow(int left, int top, int width, int height, struct Screen *screen) {
 #ifdef DEBUG_VIDEO
-	SDL_LogDebugMsgchar("Trying to create a window (fullscreen mode) - width=%d, height=%d\n", width, height);
+	SDL_LogDebugMsgchar("Trying to create a window - left=%d, top=%d, width=%d, height=%d\n", left, top, width, height);
 #endif
 
 	return OpenWindowTags(NULL,
 						WA_CustomScreen, (ULONG)screen,
-						WA_Left, 0,
-						WA_Top, 0,
+						WA_Left, left,
+						WA_Top, top,
 						WA_Width, width,
 						WA_Height, height,
 						WA_Backdrop, TRUE,
@@ -417,9 +475,11 @@ static SDL_Surface* createSurface(int width, int height, int depth, Uint32 flags
    	return SDL_CreateRGBSurface(flags, width, height, depth, rmask, gmask, bmask, amask);
 }
 
-SDL_Surface* AGA_SetVideoMode(SDL_Surface *currentSurface, int width, int height, int bpp, Uint32 flags) {
+static SDL_Surface* AGA_SetVideoMode(SDL_Surface *currentSurface, int width, int height, int bpp, Uint32 flags) {
 	ULONG modeId = INVALID_ID;
-    ULONG blackPen;
+    LONG blackPen;
+    int screenWidth = width;
+    int screenHeight = height;
 
 #ifdef DEBUG_VIDEO
 	SDL_LogDebugMsgchar("[AGA_SetVideoMode]: width=%d, height=%d, depth=%d\n", width, height, bpp);
@@ -469,32 +529,58 @@ SDL_Surface* AGA_SetVideoMode(SDL_Surface *currentSurface, int width, int height
 
 	// Free any existing mode.
 	AGA_ShutdownMode();
-	
-    //if ((flags & SDL_FULLSCREEN) == SDL_FULLSCREEN) {
-        modeId = BestModeID(BIDTAG_NominalWidth, width,
-                            BIDTAG_NominalHeight, height,
-                	        BIDTAG_DesiredWidth, width,
-                	        BIDTAG_DesiredHeight, height,
+
+	// No OpenGL on AGA.
+	if ((flags & SDL_OPENGL) == SDL_OPENGL) {
+		SDL_SetError("OpenGL is not supported by the AGA driver");
+		return NULL;
+	}
+
+	if ((flags & SDL_FULLSCREEN) != SDL_FULLSCREEN) {
+		// There is no real windowed mode, the 'window' is centred on the smallest screen it fits on.
+		if (!FindVirtualScreenSize(width, height, &screenWidth, &screenHeight)) {
+			SDL_SetError("Unsupported window attributes: width=%d, height=%d", width, height);
+			return NULL;
+		}
+
+#ifdef DEBUG_VIDEO
+		SDL_LogDebugMsgchar("[AGA_SetVideoMode]: Using a %dx%d screen for the %dx%d virtual window\n", screenWidth, screenHeight, width, height);
+#endif
+	}
+
+	{
+        modeId = BestModeID(BIDTAG_NominalWidth, screenWidth,
+                            BIDTAG_NominalHeight, screenHeight,
+                	        BIDTAG_DesiredWidth, screenWidth,
+                	        BIDTAG_DesiredHeight, screenHeight,
                 	        BIDTAG_Depth, AGA_DISPLAY_DEPTH,
                 	        BIDTAG_MonitorID, PAL_MONITOR_ID,
                 	        TAG_END);
 
 		if (modeId == INVALID_ID) {
-			SDL_SetError("Could not find a suitable PAL mode for the attributes: width=%d, height=%d, depth=%d", width, height, AGA_DISPLAY_DEPTH);
+			SDL_SetError("Could not find a suitable PAL mode for the attributes: width=%d, height=%d, depth=%d", screenWidth, screenHeight, AGA_DISPLAY_DEPTH);
 			return NULL;
 		}
 
 		// Validate the mode.
-		if (!IsValidPALMode(modeId, width, height)) {
-			SDL_SetError("Could not find a suitable PAL mode for the attributes: width=%d, height=%d, depth=%d", width, height, AGA_DISPLAY_DEPTH);
+		if (!IsValidPALMode(modeId, screenWidth, screenHeight)) {
+			SDL_SetError("Could not find a suitable PAL mode for the attributes: width=%d, height=%d, depth=%d", screenWidth, screenHeight, AGA_DISPLAY_DEPTH);
 			return NULL;
 		}
         		
-		_customScreen = createCustomScreen(modeId, width, height, AGA_DISPLAY_DEPTH);
+		_customScreen = createCustomScreen(modeId, screenWidth, screenHeight, AGA_DISPLAY_DEPTH);
         if (!_customScreen) {
-            SDL_SetError("Could not create a screen for the mode attributes: width=%d, height=%d, depth=%d", width, height, AGA_DISPLAY_DEPTH);
+            SDL_SetError("Could not create a screen for the mode attributes: width=%d, height=%d, depth=%d", screenWidth, screenHeight, AGA_DISPLAY_DEPTH);
             return NULL;
         }
+
+        _screenWidth = screenWidth;
+        _screenHeight = screenHeight;
+        _surfaceLeft = (screenWidth - width) / 2;
+        _surfaceTop = (screenHeight - height) / 2;
+
+        // Our palette is lost when the screen is reopened, put it back.
+        LoadPalette(0, 256);
 
         // Set up double buffering.
     	_hardwareScreenBuffer[0] = AllocScreenBuffer(_customScreen, NULL, SB_SCREEN_BITMAP);
@@ -511,11 +597,28 @@ SDL_Surface* AGA_SetVideoMode(SDL_Surface *currentSurface, int width, int height
 
     	c2p[0] = c2p8_reloc_stub(_hardwareScreenBuffer[0]->sb_BitMap);
     	c2p[1] = c2p8_reloc_stub(_hardwareScreenBuffer[1]->sb_BitMap);
+    	if (!c2p[0] || !c2p[1]) {
+    		SDL_SetError("Couldn't initialise the C2P for the requested mode");
+    		return NULL;
+    	}
 
+    	// Buffer 0 (the screen's own bitmap) is on display, so we draw into buffer 1 first.
     	_currentScreenBuffer = 1;
+
+    	// The virtual window needs a screen sized chunky buffer.
+    	if ((screenWidth != width) || (screenHeight != height)) {
+    		_chunkyBuffer = (UBYTE*) SDL_malloc(screenWidth * screenHeight);
+    		if (!_chunkyBuffer) {
+    			SDL_OutOfMemory();
+    			return NULL;
+    		}
+
+    		// Note, the border uses pen 0.
+    		SDL_memset(_chunkyBuffer, 0, screenWidth * screenHeight);
+    	}
 		
-		// Create the (full screen) window.
-		AMIGA_WINDOW = createWindow(width, height, _customScreen);
+		// Create the window, in fullscreen mode this covers the whole screen.
+		AMIGA_WINDOW = createWindow(_surfaceLeft, _surfaceTop, width, height, _customScreen);
 		if (!AMIGA_WINDOW) {
 			SDL_SetError("Could not create a window for the mode attributes: width=%d, height=%d", width, height);
 			return NULL;
@@ -528,7 +631,7 @@ SDL_Surface* AGA_SetVideoMode(SDL_Surface *currentSurface, int width, int height
             RectFill(AMIGA_WINDOW->RPort, 0, 0, AMIGA_WINDOW->Width - 1, AMIGA_WINDOW->Height - 1);
             ReleasePen(_customScreen->ViewPort.ColorMap, blackPen);
         }
-    //}
+    }
     
   	// Create a new software surface, this new surface will NOT contain the passed surface flags!
    	currentSurface = createSurface(width, height, AGA_DISPLAY_DEPTH, flags);
@@ -537,23 +640,17 @@ SDL_Surface* AGA_SetVideoMode(SDL_Surface *currentSurface, int width, int height
 		return NULL;
     }
 			
+	// The C2P converts the surface in one go so it cannot have any padding.
+	if (!_chunkyBuffer && (currentSurface->pitch != screenWidth)) {
+		SDL_SetError("The surface pitch (%d) does not match the screen width (%d)", currentSurface->pitch, screenWidth);
+		SDL_FreeSurface(currentSurface);
+		return NULL;
+	}
+
 	// Add back any missing flags (that we care about).
 	if ((flags & SDL_FULLSCREEN) == SDL_FULLSCREEN) {
 		currentSurface->flags |= SDL_FULLSCREEN;
 	}
-
-#ifdef SDL_VIDEO_OPENGL
-	// Create OpenGL Context if needed.
-	if ((flags & SDL_OPENGL) == SDL_OPENGL) {
-		if (NovaMesa_Init() < 0) {
-			// Error already reported.
-			return NULL;
-		} else {
-			// Our new surface now supports OpenGL.
-			currentSurface->flags |= SDL_OPENGL;
-		}
-	}
-#endif
 
     // Seed SDL with the real pointer position. The activation message will
     // eventually do this for us, but not until the first PumpEvents, which
@@ -581,32 +678,14 @@ static int AGA_SetColors(int firstcolor, int ncolors, SDL_Color *colors) {
 	SDL_LogDebugMsgchar("[AGA_SetColors]: number of colors = %d\n", ncolors);
 #endif
 
+    if ((firstcolor < 0) || (ncolors <= 0) || (firstcolor + ncolors > 256)) {
+    	return 0;
+    }
+
    	SDL_memcpy(_currentPalette + firstcolor, colors, ncolors * sizeof(SDL_Color));
 
-    if (_customScreen) {
-        int i;
-        ULONG palette[256 * 3 + 2];	
-    
-        // When running in fullscreen mode, immediately apply the changes.
-    	for (i = 0; i < ncolors; i++) {
-    		palette[i * 3 + 1] = _currentPalette[firstcolor + i].r << 24;
-    		palette[i * 3 + 2] = _currentPalette[firstcolor + i].g << 24;
-    		palette[i * 3 + 3] = _currentPalette[firstcolor + i].b << 24;
-    	}
-    
-    	palette[0] = (ncolors << 16) + firstcolor;
-    	palette[((ncolors * 3) + 1)] = 0x00000000;    
-    	LoadRGB32(&_customScreen->ViewPort, palette);
-    } else {
-        // For windowed mode, store for later (because it doesn't really have a palette).
-        if (firstcolor < _paletteDirtyStart) {
-            _paletteDirtyStart = firstcolor;
-        }
-
-        if (firstcolor + ncolors > _paletteDirtyEnd) {
-            _paletteDirtyEnd = firstcolor + ncolors;
-        }
-    }
+   	// Apply the changes straight away (if there's no screen yet it gets the stored palette when it opens).
+   	LoadPalette(firstcolor, ncolors);
 
 	return 1;
 }
@@ -620,6 +699,7 @@ static void AGA_UpdateRects(int numrects, SDL_Rect *rects) {
 	if (AMIGA_WINDOW) {
 		int i;
 		Sint16 dirtyStart, dirtyEnd;
+		UBYTE *chunky;
 
 		// Seed.
 		dirtyStart = SDL_VideoSurface->h;
@@ -660,11 +740,25 @@ static void AGA_UpdateRects(int numrects, SDL_Rect *rects) {
     	SDL_LogDebugMsgchar("[AGA_UpdateRects]: dirtyEnd = %d\n", dirtyEnd);
 #endif
 
-#ifdef DEBUG_UPDATE_RECTS
-		SDL_LogDebugMsgchar("[AGA_UpdateRects]: Performing a direct blit because we are using a fullscreen mode with an 8-bit source surface\n");
-#endif
+		if (_chunkyBuffer) {
+			// Virtual window, copy the dirty rows into the (persistent) screen sized buffer.
+			UBYTE *src = (UBYTE*)SDL_VideoSurface->pixels + (dirtyStart * SDL_VideoSurface->pitch);
+			UBYTE *dst = _chunkyBuffer + ((_surfaceTop + dirtyStart) * _screenWidth) + _surfaceLeft;
+
+			for (i = dirtyStart; i < dirtyEnd; i++) {
+				SDL_memcpy(dst, src, SDL_VideoSurface->w);
+				src += SDL_VideoSurface->pitch;
+				dst += _screenWidth;
+			}
+
+			chunky = _chunkyBuffer;
+		} else {
+			chunky = (UBYTE*)SDL_VideoSurface->pixels;
+		}
+
+		// Note, the whole screen is always converted because the back buffer is a frame behind.
 		c2p8_stub(c2p[_currentScreenBuffer], _hardwareScreenBuffer[_currentScreenBuffer]->sb_BitMap,
-				(UBYTE*)SDL_VideoSurface->pixels, (SDL_VideoSurface->w * SDL_VideoSurface->h));
+				chunky, (ULONG)(_screenWidth * _screenHeight));
 
 		if (ChangeScreenBuffer(_customScreen, _hardwareScreenBuffer[_currentScreenBuffer])) {
 		   _currentScreenBuffer = _currentScreenBuffer ^ 1;
@@ -820,14 +914,6 @@ static SDL_VideoDevice* AGA_CreateDevice(int devindex) {
 	device->UnlockHWSurface = NULL;
 	device->FlipHWSurface = NULL;
 	device->FreeHWSurface = NULL;
-
-#ifdef SDL_VIDEO_OPENGL
-	device->GL_LoadLibrary = NovaMesa_LoadLibrary;
-	device->GL_GetProcAddress = NovaMesa_GetProcAddress;
-	device->GL_GetAttribute = NULL;
-	device->GL_MakeCurrent = NovaMesa_MakeCurrent;
-	device->GL_SwapBuffers = NovaMesa_SwapBuffers;
-#endif
 
 	device->UpdateMouse = Amiga_UpdateMouse;
 	device->GrabInput = Amiga_GrabInput;
