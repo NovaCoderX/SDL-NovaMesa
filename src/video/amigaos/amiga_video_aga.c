@@ -579,9 +579,6 @@ static SDL_Surface* AGA_SetVideoMode(SDL_Surface *currentSurface, int width, int
         _surfaceLeft = (screenWidth - width) / 2;
         _surfaceTop = (screenHeight - height) / 2;
 
-        // Our palette is lost when the screen is reopened, put it back.
-        LoadPalette(0, 256);
-
         // Set up double buffering.
     	_hardwareScreenBuffer[0] = AllocScreenBuffer(_customScreen, NULL, SB_SCREEN_BITMAP);
     	if (!_hardwareScreenBuffer[0]) {

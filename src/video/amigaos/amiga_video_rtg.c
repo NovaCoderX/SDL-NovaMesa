@@ -309,6 +309,23 @@ static int RTG_VideoInit(SDL_PixelFormat *vformat) {
 	return 0;
 }
 
+static void FreeScreenModeList(void) {
+	int i;
+
+	if (_screenModeList) {
+		for (i = 0; i < _numScreenModes; ++i) {
+			if (_screenModeList[i]) {
+				SDL_free(_screenModeList[i]);
+			}
+		}
+
+		SDL_free(_screenModeList);
+		_screenModeList = NULL;
+	}
+
+	_numScreenModes = 0;
+}
+
 SDL_Rect** RTG_ListModes(SDL_PixelFormat *format, Uint32 flags) {
     int i;
     SDL_bool allocationError = SDL_FALSE;
@@ -327,15 +344,7 @@ SDL_Rect** RTG_ListModes(SDL_PixelFormat *format, Uint32 flags) {
 #endif
 
 	// Reset.
-	if (_screenModeList) {
-		for (i = 0; i < _numScreenModes; ++i) {
-			SDL_free(_screenModeList[i]);
-		}
-
-		SDL_free(_screenModeList);
-		_screenModeList = NULL;
-		_numScreenModes = 0;
-	}
+    FreeScreenModeList();
 
 	if ((flags & SDL_FULLSCREEN) == SDL_FULLSCREEN) {
 		ULONG width, height, pixelFormat;
@@ -535,8 +544,7 @@ SDL_Rect** RTG_ListModes(SDL_PixelFormat *format, Uint32 flags) {
         SDL_LogWarningMsgchar("Could not allocate the screen mode data\n");
 
         // Reset.
-        _screenModeList = NULL;
-        _numScreenModes = 0;
+        FreeScreenModeList();
     }
 
     // SDL wants the list in reverse order, largest to smallest.
@@ -636,8 +644,7 @@ SDL_Rect** RTG_ListModesEx(SDL_PixelFormat *format, Uint32 flags) {
                  SDL_LogWarningMsgchar("Could not allocate screen mode data\n");
     
                 // Reset.
-                _screenModeList = NULL;
-                _numScreenModes = 0;               
+                 FreeScreenModeList();
             } else {
                 _screenModeList[_numScreenModes - 1]->x = 0;
         		_screenModeList[_numScreenModes - 1]->y = 0;
@@ -1216,8 +1223,6 @@ static void RTG_UpdateRects(int numrects, SDL_Rect *rects) {
  another SDL video routine -- notably UpdateRects.
  */
 static void RTG_VideoQuit(void) {
-	int i;
-
 #ifdef DEBUG_VIDEO
 	SDL_LogDebugMsgchar("[RTG_VideoQuit]: Called\n");
 #endif
@@ -1232,15 +1237,7 @@ static void RTG_VideoQuit(void) {
 		}
 	}
 
-	if (_screenModeList) {
-		for (i = 0; i < _numScreenModes; ++i) {
-			SDL_free(_screenModeList[i]);
-		}
-
-		SDL_free(_screenModeList);
-		_screenModeList = NULL;
-		_numScreenModes = 0;
-	}
+	FreeScreenModeList();
 	
     if (_screenTitle) {
         SDL_free(_screenTitle);
